@@ -4,3 +4,8 @@ __pycache__/
 .env
 *.egg-info/
 .vercel/
+
+.vercel
+.claude
+claude.md
+claude.json
