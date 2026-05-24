@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import requests
 import random
@@ -9,9 +10,10 @@ from .schemas import CandidateSchema, RankedJobSchema
 
 load_dotenv()
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-HF_API_TOKEN = os.getenv("HF_API_TOKEN")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_API_KEY  = os.getenv("GROQ_API_KEY")
+HF_API_TOKEN  = os.getenv("HF_API_TOKEN")
+GROQ_MODEL    = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+RAPIDAPI_KEY  = os.getenv("RAPIDAPI_KEY")
 
 # HF sentence-similarity model (all-MiniLM-L6-v2 via the router serverless API)
 _HF_MODEL_URL = (
@@ -20,6 +22,50 @@ _HF_MODEL_URL = (
 )
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+
+# ─── Location extraction ───────────────────────────────────────────────────────
+
+# Well-known locations for fallback matching (case-insensitive)
+_KNOWN_LOCATIONS = [
+    # Countries
+    "India", "USA", "United States", "UK", "United Kingdom", "Canada",
+    "Australia", "Germany", "France", "Netherlands", "Singapore", "Japan",
+    "Dubai", "UAE", "Sweden", "Norway", "New Zealand", "Ireland",
+    # Indian cities
+    "Bangalore", "Bengaluru", "Mumbai", "Delhi", "New Delhi", "Hyderabad",
+    "Pune", "Chennai", "Kolkata", "Ahmedabad", "Jaipur", "Gurgaon", "Noida",
+    # US cities
+    "New York", "San Francisco", "Seattle", "Austin", "Boston",
+    "Chicago", "Los Angeles", "Denver", "Atlanta", "Washington",
+    # Other cities
+    "London", "Toronto", "Vancouver", "Sydney", "Melbourne", "Berlin",
+    "Amsterdam", "Paris", "Dublin", "Tokyo", "Zurich",
+]
+
+
+def _extract_location(text: str) -> str:
+    """
+    Extract a location/city/country from a free-text refinement answer.
+    Checks 'in/from/based in <place>' patterns first, then falls back to
+    a known-locations list. Returns '' when nothing is found.
+    """
+    # Pattern: "jobs in India", "based in New York", "from Bangalore" etc.
+    m = re.search(
+        r'\b(?:in|from|at|based\s+in|located\s+in|only\s+in|prefer\s+in)\s+'
+        r'([A-Za-z][A-Za-z\s]{1,30}?)(?=\s*(?:only|please|,|\.|$|\band\b|\bor\b))',
+        text, re.IGNORECASE
+    )
+    if m:
+        loc = m.group(1).strip()
+        if len(loc) > 1:
+            return loc.title()
+
+    # Fallback: scan for any known location name
+    for loc in _KNOWN_LOCATIONS:
+        if re.search(r'\b' + re.escape(loc) + r'\b', text, re.IGNORECASE):
+            return loc
+
+    return ""
 
 _jobs_path = os.path.join(os.path.dirname(__file__), "jobs.json")
 with open(_jobs_path, "r") as _f:
@@ -84,29 +130,122 @@ def _get_similarity_scores(resume_text: str, job_texts: List[str]) -> List[float
         return scores
 
 
-def rank_jobs(search_text: str, top_n: int = 5) -> List[Dict[str, Any]]:
+def _build_job_text(job: Dict[str, Any]) -> str:
+    skills_str = ", ".join(job.get("skills") or []) or "Not specified"
+    return (
+        f"{job['title']} at {job['company']}. "
+        f"{job.get('description', '')} "
+        f"Required skills: {skills_str}. "
+        f"Remote: {job.get('remote', False)}."
+    )
+
+
+def fetch_live_jobs(
+    candidate: "CandidateSchema",
+    num_pages: int = 3,
+    location: str = "",
+) -> List[Dict[str, Any]]:
+    """
+    Fetch real-time jobs from JSearch (aggregates LinkedIn, Indeed, Glassdoor).
+    When `location` is provided it is passed as a JSearch filter so results are
+    restricted to that country/city. Falls back to static jobs on API failure.
+    """
+    roles  = " OR ".join(candidate.preferred_roles[:2]) if candidate.preferred_roles else ""
+    skills = " ".join(candidate.skills[:3]) if candidate.skills else ""
+    query  = f"{roles} {skills}".strip() or "software engineer"
+
+    params: Dict[str, str] = {
+        "query":     query,
+        "page":      "1",
+        "num_pages": str(num_pages),
+        "date_posted": "all",
+    }
+    if location:
+        params["location"] = location
+        print(f"[JSearch] Filtering by location: {location}")
+
+    resp = requests.get(
+        "https://jsearch.p.rapidapi.com/search",
+        headers={
+            "X-RapidAPI-Key":  RAPIDAPI_KEY,
+            "X-RapidAPI-Host": "jsearch.p.rapidapi.com",
+        },
+        params=params,
+        timeout=15,
+    )
+    resp.raise_for_status()
+    raw_jobs = resp.json().get("data", [])
+
+    normalized = []
+    for i, job in enumerate(raw_jobs):
+        city    = job.get("job_city")    or ""
+        state   = job.get("job_state")   or ""
+        country = job.get("job_country") or ""
+        location = ", ".join(p for p in [city, state, country] if p)[:2]
+        location = ", ".join([p for p in [city, country] if p]) or "Location not specified"
+
+        normalized.append({
+            "id":               i,
+            "title":            job.get("job_title", ""),
+            "company":          job.get("employer_name", ""),
+            "location":         location,
+            "remote":           bool(job.get("job_is_remote", False)),
+            "domain":           "Technology",
+            "skills":           job.get("job_required_skills") or [],
+            "experience_years": 0,
+            "salary_lpa":       None,
+            "description":      (job.get("job_description") or "")[:600],
+            "apply_link":       job.get("job_apply_link") or job.get("job_google_link") or "",
+        })
+
+    return normalized
+
+
+def rank_jobs(
+    search_text: str,
+    top_n: int = 5,
+    candidate: "CandidateSchema | None" = None,
+    location: str = "",
+) -> List[Dict[str, Any]]:
     """
     Return the top_n jobs most semantically similar to search_text.
-    One batched HF API call scores all 50 jobs simultaneously.
+    Uses live JSearch jobs when RAPIDAPI_KEY is set; falls back to static dataset.
+    When `location` is provided, JSearch restricts results to that country/city.
     """
-    scores = _get_similarity_scores(search_text, _JOB_TEXTS)
-    ranked = sorted(
-        zip(JOBS, scores),
-        key=lambda pair: pair[1],
-        reverse=True,
-    )
+    jobs: List[Dict[str, Any]]
+    job_texts: List[str]
+
+    if RAPIDAPI_KEY and candidate:
+        try:
+            jobs = fetch_live_jobs(candidate, location=location)
+            if not jobs:
+                raise ValueError("JSearch returned no results")
+            job_texts = [_build_job_text(j) for j in jobs]
+            print(f"[JSearch] Fetched {len(jobs)} live jobs" + (f" in {location}" if location else ""))
+        except Exception as exc:
+            print(f"[JSearch Error] {exc} — falling back to static jobs")
+            jobs      = JOBS
+            job_texts = _JOB_TEXTS
+    else:
+        jobs      = JOBS
+        job_texts = _JOB_TEXTS
+
+    scores = _get_similarity_scores(search_text, job_texts)
+    ranked = sorted(zip(jobs, scores), key=lambda pair: pair[1], reverse=True)
+
     return [
         {
-            "id": j["id"],
-            "title": j["title"],
-            "company": j["company"],
-            "location": j["location"],
-            "remote": j["remote"],
-            "domain": j["domain"],
-            "skills": j["skills"],
-            "experience_years": j["experience_years"],
-            "salary_lpa": j["salary_lpa"],
-            "description": j["description"],
+            "id":               j["id"],
+            "title":            j["title"],
+            "company":          j["company"],
+            "location":         j.get("location", ""),
+            "remote":           j.get("remote", False),
+            "domain":           j.get("domain", ""),
+            "skills":           j.get("skills", []),
+            "experience_years": j.get("experience_years", 0),
+            "salary_lpa":       j.get("salary_lpa"),
+            "description":      j.get("description", ""),
+            "apply_link":       j.get("apply_link", ""),
             "similarity_score": round(s, 4),
         }
         for j, s in ranked[:top_n]
@@ -243,16 +382,19 @@ def generate_job_explanations(
     if not groq_client:
         raise ValueError("GROQ_API_KEY is not configured.")
 
+    # Re-index jobs 0…N-1 so explanation_map lookups are always reliable
+    for idx, j in enumerate(ranked_jobs):
+        j["_idx"] = idx
+
     jobs_summary = [
         {
-            "id": j["id"],
-            "title": j["title"],
-            "company": j["company"],
-            "domain": j["domain"],
-            "required_skills": j["skills"],
-            "experience_needed_years": j["experience_years"],
-            "remote": j["remote"],
-            "description": j["description"][:300],
+            "id":               j["_idx"],
+            "title":            j["title"],
+            "company":          j["company"],
+            "location":         j.get("location", ""),
+            "remote":           j.get("remote", False),
+            "required_skills":  j.get("skills", [])[:5],
+            "description":      j.get("description", "")[:150],
             "similarity_score": j["similarity_score"],
         }
         for j in ranked_jobs
@@ -263,7 +405,7 @@ def generate_job_explanations(
             "role": "system",
             "content": (
                 "You are a senior technical recruiter. Analyse the candidate profile "
-                "against each matched job. Be specific about skill overlaps and gaps. "
+                "against each matched job. Be concise — 1-2 sentences per job. "
                 "The clarifying question must target a real, observable gap or "
                 "ambiguity — not a generic question."
             ),
@@ -272,9 +414,9 @@ def generate_job_explanations(
             "role": "user",
             "content": (
                 f"Candidate profile:\n{candidate.model_dump_json(indent=2)}\n\n"
-                f"Top matched jobs:\n{json.dumps(jobs_summary, indent=2)}\n\n"
-                "Call the tool with a 2-3 sentence explanation for every job "
-                "and one targeted clarifying question."
+                f"Matched jobs ({len(ranked_jobs)} total):\n{json.dumps(jobs_summary, indent=2)}\n\n"
+                f"Call the tool with a 1-2 sentence explanation for EVERY one of these "
+                f"{len(ranked_jobs)} jobs (all {len(ranked_jobs)}) and one clarifying question."
             ),
         },
     ]
@@ -288,16 +430,23 @@ def generate_job_explanations(
 
     tool_call = response.choices[0].message.tool_calls[0]
     args = json.loads(tool_call.function.arguments)
+    # Key by _idx (0-based) which we set above — always matches regardless of original job ID
     explanation_map = {ex["job_id"]: ex["explanation"] for ex in args["explanations"]}
     clarifying_question = args.get("clarifying_question", "")
 
     final_jobs = [
         RankedJobSchema(
-            id=j["id"],
+            id=j["_idx"],
             title=j["title"],
             company=j["company"],
+            location=j.get("location") or None,
+            is_remote=j.get("remote") or False,
+            apply_link=j.get("apply_link") or None,
             similarity_score=j["similarity_score"],
-            explanation=explanation_map.get(j["id"], "Strong semantic match."),
+            explanation=explanation_map.get(
+                j["_idx"],
+                f"Strong semantic match for your profile at {j['company']}.",
+            ),
         )
         for j in ranked_jobs
     ]
@@ -325,8 +474,12 @@ def process_refinement(
         f"Candidate answer: {answer}"
     )
 
-    ranked_jobs_dicts = rank_jobs(augmented_text, top_n=5)
+    # Extract location from the candidate's answer (e.g. "jobs in India")
+    location = _extract_location(answer)
+
+    # Parse candidate first so rank_jobs can build a live JSearch query
     candidate = parse_resume_with_groq(augmented_text)
+    ranked_jobs_dicts = rank_jobs(augmented_text, top_n=20, candidate=candidate, location=location)
     final_jobs, _ = generate_job_explanations(candidate, ranked_jobs_dicts)
 
     # Brief reasoning for why the ranking shifted

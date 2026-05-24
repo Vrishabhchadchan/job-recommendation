@@ -16,6 +16,9 @@ class RankedJobSchema(BaseModel):
     id: int
     title: str
     company: str
+    location: Optional[str] = None
+    is_remote: Optional[bool] = None
+    apply_link: Optional[str] = None
     similarity_score: float
     explanation: str
 

@@ -1,5 +1,8 @@
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from .schemas import RecommendRequest, RecommendResponse, RefineRequest, RefineResponse
 from .dependencies import (
     rank_jobs,
@@ -19,8 +22,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Serve the React-less frontend from /public
+_PUBLIC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "public")
+if os.path.isdir(_PUBLIC):
+    app.mount("/static", StaticFiles(directory=_PUBLIC), name="static")
+
 @app.get("/")
 def read_root():
+    index = os.path.join(_PUBLIC, "index.html")
+    if os.path.isfile(index):
+        return FileResponse(index, media_type="text/html")
     return {"status": "ok", "message": "Smart Job Match Agent API is running"}
 
 @app.post("/recommend", response_model=RecommendResponse)
@@ -32,10 +43,10 @@ def recommend_jobs(request: RecommendRequest):
         # Step 1: Extract candidate info using Groq Tool Calling
         candidate_info = parse_resume_with_groq(request.resume_text)
         
-        # Step 2: Semantic ranking using ML layer
-        # Include extracted candidate preferences to boost relevant job matches
+        # Step 2: Semantic ranking — uses live JSearch jobs if RAPIDAPI_KEY is set,
+        # otherwise falls back to the static jobs.json dataset.
         search_query = f"{' '.join(candidate_info.preferred_roles)} {' '.join(candidate_info.skills)} {request.resume_text}"
-        top_jobs_dicts = rank_jobs(search_query, top_n=5)
+        top_jobs_dicts = rank_jobs(search_query, top_n=20, candidate=candidate_info)
         
         # Step 3: Match Reasoning Tool — returns explanations + clarifying question
         ranked_jobs, clarifying_question = generate_job_explanations(candidate_info, top_jobs_dicts)

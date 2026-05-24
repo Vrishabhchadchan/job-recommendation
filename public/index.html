@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Job Match — AI Career Recommendations</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+    rel="stylesheet" />
+
+  <!-- PDF.js for in-browser PDF text extraction -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- Mammoth.js for DOCX extraction -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+  <!-- Google Identity Services -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+
+<body>
+
+  <!-- Ambient blobs -->
+  <div class="ambient">
+    <div class="blob b1"></div>
+    <div class="blob b2"></div>
+    <div class="blob b3"></div>
+  </div>
+
+  <!-- ─── NAVBAR ─── -->
+  <nav class="navbar">
+    <a class="brand" href="/">
+      <div class="brand-icon">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="url(#bg)" />
+          <defs>
+            <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#6366f1" />
+              <stop offset="100%" stop-color="#a855f7" />
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+      <span>Smart Job Match</span>
+    </a>
+
+    <div class="nav-right">
+      <!-- Signed-out: Google button -->
+      <div id="signin-wrap">
+        <button class="google-btn" id="google-btn" onclick="triggerGoogleSignIn()">
+          <svg class="g-icon" viewBox="0 0 24 24">
+            <path
+              d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+              fill="#4285F4" />
+            <path
+              d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+              fill="#34A853" />
+            <path
+              d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+              fill="#FBBC05" />
+            <path
+              d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+              fill="#EA4335" />
+          </svg>
+          Sign in with Google
+        </button>
+      </div>
+
+      <!-- Signed-in: avatar + name -->
+      <div id="user-wrap" class="hidden">
+        <img id="user-avatar" class="user-avatar" src="" alt="" />
+        <span id="user-name" class="user-name"></span>
+        <button class="signout-btn" onclick="signOut()">Sign out</button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ─── MAIN ─── -->
+  <main>
+
+    <!-- ── UPLOAD VIEW ── -->
+    <div id="view-upload" class="view active">
+      <div class="hero">
+
+        <div class="hero-badge">
+          <span class="pulse"></span>
+          Powered by Groq · HuggingFace · LLaMA 3
+        </div>
+
+        <h1 class="hero-title">
+          Find Your Perfect<br />
+          <span class="grad-text">Career Match</span>
+        </h1>
+
+        <p class="hero-sub">
+          Drop your resume and our AI will parse your skills, compute semantic similarity
+          across dozens of roles, and surface your best-fit opportunities — with explanations.
+        </p>
+
+        <!-- Stats row -->
+        <div class="stats-row">
+          <div class="stat-item"><span class="stat-num">50+</span><span class="stat-label">Live Jobs</span></div>
+          <div class="stat-div"></div>
+          <div class="stat-item"><span class="stat-num">AI</span><span class="stat-label">Powered</span></div>
+          <div class="stat-div"></div>
+          <div class="stat-item"><span class="stat-num">&lt;15s</span><span class="stat-label">Analysis Time</span>
+          </div>
+        </div>
+
+        <!-- Upload Card -->
+        <div class="upload-card">
+
+          <!-- Drop Zone -->
+          <div id="drop-zone" class="drop-zone" ondragenter="onDragEnter(event)" ondragover="onDragOver(event)"
+            ondragleave="onDragLeave(event)" ondrop="onDrop(event)" onclick="triggerFilePicker()">
+
+            <!-- Idle state -->
+            <div id="dz-idle" class="dz-state">
+              <div class="dz-icon-wrap">
+                <svg class="dz-icon" viewBox="0 0 80 80" fill="none">
+                  <circle cx="40" cy="40" r="40" fill="url(#dz-grad)" opacity="0.15" />
+                  <path d="M40 54V36M40 36l-8 8M40 36l8 8" stroke="url(#dz-grad)" stroke-width="2.5"
+                    stroke-linecap="round" stroke-linejoin="round" />
+                  <path d="M26 56h28" stroke="url(#dz-grad)" stroke-width="2.5" stroke-linecap="round" opacity="0.6" />
+                  <defs>
+                    <linearGradient id="dz-grad" x1="0" y1="0" x2="80" y2="80" gradientUnits="userSpaceOnUse">
+                      <stop stop-color="#6366f1" />
+                      <stop offset="1" stop-color="#a855f7" />
+                    </linearGradient>
+                  </defs>
+                </svg>
+                <div class="dz-glow"></div>
+              </div>
+              <h3 class="dz-heading">Drop your resume here</h3>
+              <p class="dz-sub">or <span class="dz-browse">click to browse files</span></p>
+              <div class="format-tags">
+                <span>PDF</span><span>TXT</span><span>DOCX</span>
+              </div>
+            </div>
+
+            <!-- Drag-over state -->
+            <div id="dz-hover" class="dz-state hidden">
+              <div class="dz-drop-icon">📂</div>
+              <p class="dz-drop-text">Release to upload</p>
+            </div>
+
+            <!-- File selected state -->
+            <div id="dz-selected" class="dz-state hidden">
+              <div class="file-chip-wrap">
+                <div class="file-chip">
+                  <svg class="file-chip-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path stroke-linecap="round" stroke-linejoin="round"
+                      d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                  </svg>
+                  <span id="file-chip-name">resume.pdf</span>
+                  <button class="file-chip-x" onclick="removeFile(event)" title="Remove file">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <p class="dz-ready">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" width="16" height="16">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                </svg>
+                File ready — click below to analyze
+              </p>
+            </div>
+          </div>
+
+          <input type="file" id="file-input" class="sr-only" accept=".pdf,.txt,.doc,.docx"
+            onchange="onFileChange(event)" />
+
+          <!-- Divider -->
+          <div class="or-divider">
+            <div class="or-line"></div>
+            <span>or paste resume text</span>
+            <div class="or-line"></div>
+          </div>
+
+          <!-- Paste area -->
+          <div class="paste-wrap">
+            <textarea id="resume-ta" placeholder="Paste your resume content here..." oninput="onTextInput()"></textarea>
+            <div id="char-count" class="char-count">0 characters</div>
+          </div>
+
+          <!-- Analyze button -->
+          <button id="analyze-btn" class="primary-btn" onclick="runAnalysis()" disabled>
+            <span>Analyze My Resume</span>
+            <svg class="btn-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── RESULTS VIEW ── -->
+    <div id="view-results" class="view hidden">
+      <div class="results-wrap">
+
+        <div class="results-topbar">
+          <button class="back-btn" onclick="goBack()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" width="16" height="16">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+            </svg>
+            New Analysis
+          </button>
+        </div>
+
+        <!-- Claude-like response container -->
+        <div id="claude-response" class="claude-response"></div>
+
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ─── LOADING SCREEN ─── -->
+  <div id="loading-screen" class="loading-screen hidden">
+    <div class="loading-card">
+      <div class="orb-wrap">
+        <div class="orb-ring r1"></div>
+        <div class="orb-ring r2"></div>
+        <div class="orb-ring r3"></div>
+        <div class="orb-core">
+          <svg viewBox="0 0 24 24" fill="none" width="24" height="24">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="white" />
+          </svg>
+        </div>
+      </div>
+      <h3 id="loading-title" class="loading-title">Analyzing your resume...</h3>
+      <p id="loading-sub" class="loading-sub">This takes about 10–15 seconds</p>
+      <div class="prog-list">
+        <div class="prog-item" id="prog-1">
+          <div class="prog-dot"></div>
+          <span>Parsing resume information</span>
+          <svg class="prog-check hidden" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" width="14"
+            height="14">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+          </svg>
+        </div>
+        <div class="prog-item" id="prog-2">
+          <div class="prog-dot"></div>
+          <span>Computing semantic similarity</span>
+          <svg class="prog-check hidden" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" width="14"
+            height="14">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+          </svg>
+        </div>
+        <div class="prog-item" id="prog-3">
+          <div class="prog-dot"></div>
+          <span>Generating match explanations</span>
+          <svg class="prog-check hidden" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" width="14"
+            height="14">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+          </svg>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── TOAST ─── -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+
+</html>
