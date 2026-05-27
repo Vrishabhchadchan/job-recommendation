@@ -5,14 +5,15 @@
       "src": "api/index.py",
       "use": "@vercel/python",
       "config": {
-        "includeFiles": ["public/**", "api/jobs.json"]
+        "includeFiles": ["api/jobs.json"]
       }
     }
   ],
   "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "api/index.py"
-    }
+    { "src": "/recommend",         "dest": "api/index.py" },
+    { "src": "/refine",            "dest": "api/index.py" },
+    { "src": "/static/styles.css", "dest": "/public/styles.css" },
+    { "src": "/static/app.js",     "dest": "/public/app.js" },
+    { "src": "/(.*)",              "dest": "/public/index.html" }
   ]
 }
